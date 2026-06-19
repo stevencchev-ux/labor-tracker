@@ -1,5 +1,4 @@
-
-.<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
@@ -523,7 +522,13 @@ function submitLog() {
 }
 
 function closeModal() { document.getElementById('dup-modal').style.display = 'none'; pendingEntries = null; }
-function confirmOverwrite() { var log = getLog(); closeModal(); saveEntries(pendingEntries, log); }
+function confirmOverwrite() {
+  var log = getLog();
+  closeModal();
+  // Re-read current state at time of confirmation
+  var currentEntries = Object.values(state).filter(function(w) { return w.name && w.location && w.shift; });
+  saveEntries(currentEntries.length ? currentEntries : pendingEntries, log);
+}
 
 function saveEntries(entries, log) {
   var notesVal = document.getElementById('notes-field').value.trim();
