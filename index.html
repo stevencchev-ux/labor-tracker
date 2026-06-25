@@ -318,6 +318,9 @@
   <button class="plus-menu-item" onclick="closePlusMenu(); switchTab('__onboard')">
     <span class="item-icon">&#43;</span>Add Project
   </button>
+  <button class="plus-menu-item" onclick="closePlusMenu(); switchTab('__archive')" style="border-top:1px solid var(--border)">
+    <span class="item-icon" style="color:var(--muted)">&#8984;</span>Archives
+  </button>
 </div>
 
 <!-- Settings modal -->
@@ -565,11 +568,24 @@
   </div>
 </div>
 
+<!-- Archives page -->
+<div class="page" id="page-archive">
+  <div class="hdr" style="margin-bottom:20px">
+    <div>
+      <div class="hdr-title">Archives</div>
+      <div class="hdr-meta">COMPLETED &amp; SOLD PROJECTS</div>
+    </div>
+  </div>
+  <div style="max-width:520px;margin:0 auto" id="archive-list">
+    <div style="text-align:center;padding:40px 0;color:var(--muted);font-size:13px">No archived projects yet.<br><span style="font-size:11px;margin-top:6px;display:block">Mark a project as sold in admin mode to archive it.</span></div>
+  </div>
+</div>
+
 <!-- Onboarding page template (cloned per "+ " click) -->
 <div class="page" id="page-onboard">
   <div class="hdr"><div class="hdr-title">Add a Project</div></div>
   <div class="ob-form">
-    <div class="ob-hint">This sets up a new project tab. Purchase price, budget, and target sale are entered once here — labor and notes flow in automatically from the labor tracker once the Project ID matches.</div>
+    <div class="ob-hint">This sets up a new project tab. For Fix &amp; Flip: enter purchase price, reno budget, and target sale. For Welltower/Contract: enter contract value and reno budget. Labor and materials flow in automatically once the Project ID matches.</div>
 
     <div class="ob-field">
       <label class="ob-label">Project ID</label>
@@ -591,7 +607,7 @@
     </div>
     <div class="ob-row2">
       <div class="ob-field">
-        <label class="ob-label">Purchase Price</label>
+        <label class="ob-label">Purchase Price <span style="font-family:'DM Mono',monospace;font-size:9px;color:var(--muted);font-weight:400">(or Contract Value if WT/CO)</span></label>
         <input class="ob-input" id="ob-purchase" type="number" placeholder="850000" />
       </div>
       <div class="ob-field">
@@ -600,6 +616,14 @@
       </div>
     </div>
     <div class="ob-field">
+      <label class="ob-label">Project Type</label>
+      <select class="ob-input" id="ob-type">
+        <option value="FF">Fix &amp; Flip [FF]</option>
+        <option value="WT">Welltower [WT]</option>
+        <option value="CO">Contract / Other [CO]</option>
+      </select>
+    </div>
+    <div class="ob-field" id="ob-target-wrap">
       <label class="ob-label">Target Sale Price</label>
       <input class="ob-input" id="ob-target" type="number" placeholder="1200000" />
     </div>
@@ -612,6 +636,8 @@
 
 <script>
 const PASSCODE = '1111';
+const INTERNAL_PASSCODE = '7777';
+let internalUnlocked = false;
 
 
 var DEFAULT_CREW = [
@@ -1078,12 +1104,25 @@ function pinPress(digit) {
         document.getElementById('lock-btn').classList.add('unlocked');
         document.getElementById('lock-btn').innerHTML = '&#128275;';
         closeLockModal();
-        // Route to the right admin panel based on active tab
         if (activeTab === '__labor') {
-          showAdminPanel(); // labor entry admin
+          showAdminPanel();
         } else if (activeTab && activeTab !== '__onboard' && activeTab !== '__receipt') {
-          renderAdminPanel(activeTab); // project dashboard admin
+          renderAdminPanel(activeTab);
         }
+      } else if (pinBuffer === INTERNAL_PASSCODE) {
+        // Internal view — show all project types
+        internalUnlocked = !internalUnlocked;
+        closeLockModal();
+        buildTabBar();
+        // Show a brief banner
+        const banner = document.createElement('div');
+        banner.style.cssText = 'position:fixed;top:60px;left:50%;transform:translateX(-50%);background:var(--surface);border:1px solid var(--border2);border-radius:8px;padding:8px 16px;font-family:DM Mono,monospace;font-size:11px;color:var(--amber);z-index:100;';
+        banner.textContent = internalUnlocked ? 'Internal view — all projects visible' : 'Stakeholder view restored';
+        document.body.appendChild(banner);
+        setTimeout(function() { banner.remove(); }, 2500);
+        // Switch to first visible tab
+        const visible = getVisibleProjectIds();
+        if (visible.length) switchTab(visible[0]);
       } else {
         document.getElementById('pin-error').textContent = 'Incorrect passcode';
         pinBuffer = ''; updatePinDots();
@@ -1346,8 +1385,45 @@ function updatePinDots() {
    ============================================================ */
 let activeTab = null;
 
-function buildTabBar() {
+
+/* ============================================================
+   PROJECT TYPE HELPERS
+   FF = Fix & Flip (visible to stakeholders)
+   WT = Welltower contract (internal only)
+   CO = Other contract (internal only)
+   ============================================================ */
+function getProjectType(projectId) {
+  // First check Projects.xlsx data via cache
+  const cache = getCache(projectId);
+  if (cache && cache.project && cache.project.Type) return cache.project.Type;
+  // Fall back to locally stored type from onboarding
+  const ov = getOverrides(projectId);
+  return ov.projectType || 'FF';
+}
+
+function isInternalProject(projectId) {
+  const type = getProjectType(projectId);
+  return type === 'WT' || type === 'CO';
+}
+
+function getVisibleProjectIds() {
   const ids = getProjectIds();
+  if (internalUnlocked) return ids; // show all
+  return ids.filter(function(id) { return !isInternalProject(id); }); // only FF
+}
+
+function getProjectTypeLabel(projectId) {
+  const type = getProjectType(projectId);
+  return { FF: 'Fix & Flip', WT: 'Welltower', CO: 'Contract' }[type] || 'Fix & Flip';
+}
+
+function isContractProject(projectId) {
+  const type = getProjectType(projectId);
+  return type === 'WT' || type === 'CO';
+}
+
+function buildTabBar() {
+  const ids = getVisibleProjectIds();
   const sorted = ids.slice().sort(function(a, b) {
     const aSold = isProjectSold(a) ? 1 : 0;
     const bSold = isProjectSold(b) ? 1 : 0;
@@ -1512,6 +1588,13 @@ function switchTab(idOrOnboard) {
     $('page-receipt').classList.add('active');
     activeTab = '__receipt';
     initReceiptTab();
+    return;
+  }
+
+  if (idOrOnboard === '__archive') {
+    $('page-archive').classList.add('active');
+    activeTab = '__archive';
+    renderArchives();
     return;
   }
 
@@ -1683,6 +1766,28 @@ function renderProject(projectId, data, fromCache) {
   $('title-' + projectId).textContent = name;
   $('meta-' + projectId).textContent = totalWeeks + '-WEEK FLIP · START ' + dateLabel(startUTC).toUpperCase() + (notStarted ? '' : ' · DAY ' + elapsed);
 
+  // Adapt labels for contract vs fix & flip
+  const projectType = overrides.projectType || (project.Type) || 'FF';
+  const isContract = projectType === 'WT' || projectType === 'CO';
+
+  // Update deal summary labels dynamically
+  const purchaseLblEl = document.querySelector('#content-' + projectId + ' #deal-purchase-' + projectId);
+  const targetWrap = document.querySelector('#content-' + projectId + ' #deal-target-' + projectId);
+  const spreadWrap = document.querySelector('#content-' + projectId + ' #deal-spread-' + projectId);
+
+  if (purchaseLblEl) {
+    const lbl = purchaseLblEl.previousElementSibling;
+    if (lbl) lbl.textContent = isContract ? 'Contract Value' : 'Purchase Price';
+  }
+  if (targetWrap) {
+    const lbl = targetWrap.previousElementSibling;
+    if (lbl) lbl.textContent = isContract ? 'Reno Budget' : 'Target Sale Price';
+  }
+  if (spreadWrap) {
+    const lbl = spreadWrap.previousElementSibling;
+    if (lbl) lbl.textContent = isContract ? 'Contract Margin' : 'Projected Profit';
+  }
+
   $('deal-purchase-' + projectId).textContent = fmtK(purchasePrice);
   $('deal-reno-' + projectId).textContent = fmt(renoSpent);
   $('deal-invested-' + projectId).textContent = fmtK(totalInvested);
@@ -1690,8 +1795,11 @@ function renderProject(projectId, data, fromCache) {
   if (overrides.sale) {
     const actualSpread = parseFloat(overrides.sale.salePrice || 0) - totalInvested - parseFloat(overrides.sale.closingCosts || 0);
     $('deal-target-' + projectId).textContent = fmtK(parseFloat(overrides.sale.salePrice || 0));
-    document.querySelector('#content-' + projectId + ' .deal-lbl').parentElement; // no-op, keep structure
     $('deal-spread-' + projectId).textContent = fmt(actualSpread);
+  } else if (isContract) {
+    // Contract: show reno budget as target, margin = contract value - reno spent
+    $('deal-target-' + projectId).textContent = fmtK(renoBudget);
+    $('deal-spread-' + projectId).textContent = fmt(purchasePrice - renoSpent);
   } else {
     $('deal-target-' + projectId).textContent = fmtK(targetSale);
     $('deal-spread-' + projectId).textContent = fmt(projectedSpread);
@@ -2670,6 +2778,62 @@ document.addEventListener('click', function(e) {
   }
 });
 
+
+/* ============================================================
+   ARCHIVES
+   ============================================================ */
+function renderArchives() {
+  const ids = getProjectIds();
+  const sold = ids.filter(function(id) {
+    const ov = getOverrides(id);
+    return ov && ov.sale;
+  });
+
+  const container = $('archive-list');
+  if (!container) return;
+
+  if (!sold.length) {
+    container.innerHTML = '<div style="text-align:center;padding:40px 0;color:var(--muted);font-size:13px">No archived projects yet.<br><span style="font-size:11px;margin-top:6px;display:block">Mark a project as sold in admin mode to archive it.</span></div>';
+    return;
+  }
+
+  container.innerHTML = sold.map(function(id) {
+    const ov = getOverrides(id);
+    const sale = ov.sale;
+    const cache = getCache(id);
+    const project = cache && cache.project ? cache.project : {};
+    const name = project.Name || id;
+    const purchasePrice = parseFloat(project['Purchase Price'] || project.PurchasePrice) || 0;
+    const laborTotal = cache ? parseFloat(cache.totalLabor) || 0 : 0;
+    const materialsTotal = cache ? parseFloat(cache.materialsTotal) || 0 : 0;
+    const totalInvested = purchasePrice + laborTotal + materialsTotal;
+    const salePrice = parseFloat(sale.salePrice) || 0;
+    const closingCosts = parseFloat(sale.closingCosts) || 0;
+    const actualProfit = salePrice - totalInvested - closingCosts;
+    const type = getProjectType(id);
+    const isContract = isContractProject(id);
+
+    return '<div class="card" style="margin-bottom:12px">'
+      + '<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:12px">'
+      + '<div>'
+      + '<div style="font-family:Syne,sans-serif;font-size:15px;font-weight:700">' + name + '</div>'
+      + '<div style="font-family:DM Mono,monospace;font-size:10px;color:var(--muted);margin-top:3px">'
+      + (sale.saleDate ? 'CLOSED ' + sale.saleDate.toUpperCase() : 'COMPLETED') + ' · ' + getProjectTypeLabel(id)
+      + '</div>'
+      + '</div>'
+      + '<span style="font-family:DM Mono,monospace;font-size:10px;padding:4px 10px;border-radius:100px;background:rgba(143,174,110,0.08);color:var(--accent);border:1px solid rgba(143,174,110,0.2)">'
+      + (isContract ? 'Contract' : 'Sold') + '</span>'
+      + '</div>'
+      + '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px">'
+      + '<div><div class="kpi-lbl">' + (isContract ? 'Contract Value' : 'Sale Price') + '</div><div style="font-family:Syne,sans-serif;font-size:16px;font-weight:700;color:var(--text)">$' + Math.round(salePrice).toLocaleString() + '</div></div>'
+      + '<div><div class="kpi-lbl">Total Invested</div><div style="font-family:Syne,sans-serif;font-size:16px;font-weight:700;color:var(--text)">$' + Math.round(totalInvested).toLocaleString() + '</div></div>'
+      + '<div><div class="kpi-lbl">' + (isContract ? 'Margin' : 'Profit') + '</div><div style="font-family:Syne,sans-serif;font-size:16px;font-weight:700;color:' + (actualProfit >= 0 ? 'var(--accent)' : 'var(--red)') + '">$' + Math.round(actualProfit).toLocaleString() + '</div></div>'
+      + '</div>'
+      + (sale.notes ? '<div style="font-size:11px;color:var(--muted);margin-top:10px;padding-top:10px;border-top:1px solid var(--border)">' + sale.notes + '</div>' : '')
+      + '</div>';
+  }).join('');
+}
+
 function submitOnboard() {
   const id = $('ob-id').value.trim();
   const name = $('ob-name').value.trim();
@@ -2688,12 +2852,21 @@ function submitOnboard() {
     return;
   }
 
+  const projectType = $('ob-type') ? $('ob-type').value : 'FF';
+
   ids.push(id);
   saveProjectIds(ids);
+
+  // Save project type locally
+  const ov = getOverrides(id);
+  ov.projectType = projectType;
+  saveOverrides(id, ov);
+
   buildTabBar();
 
+  const typeLabel = { FF: 'Fix & Flip', WT: 'Welltower', CO: 'Contract' }[projectType] || projectType;
   status.className = 'ob-status success';
-  status.textContent = 'Project tab added. Add the matching row to Projects.xlsx on OneDrive (ProjectID, Name, StartDate, Weeks, Purchase Price, RenoBudget, TargetSalePrice) so the dashboard can pull its numbers.';
+  status.textContent = 'Project tab added (' + typeLabel + '). Add the matching row to Projects.xlsx on OneDrive with Type: ' + projectType + '.';
 
   setTimeout(function() { switchTab(id); }, 1400);
 }
