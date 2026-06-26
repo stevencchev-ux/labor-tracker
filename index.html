@@ -138,7 +138,7 @@
   .ms-dot.done    { background: var(--accent); border-color: var(--accent); }
   .ms-dot.active  { background: var(--amber); border-color: var(--amber); box-shadow: 0 0 0 3px rgba(179,154,92,0.15); }
   .ms-dot.overdue { background: var(--red); border-color: var(--red); }
-  .ms-name { font-size: 13px; color: var(--text); line-height: 1.4; }
+  .ms-name { font-size: 13px; color: var(--text); line-height: 1.4; text-transform: uppercase; letter-spacing: 0.04em; font-family: 'DM Mono', monospace; }
   .ms-name.done    { color: var(--muted); text-decoration: line-through; }
   .ms-name.overdue { color: var(--red); }
   .ms-name.active  { color: var(--amber); font-weight: 500; }
@@ -288,9 +288,25 @@
     input, select, textarea { font-size: 16px !important; }
   }
 
+  /* ── PULL TO REFRESH ── */
+  #ptr-indicator {
+    position: fixed; top: 0; left: 0; right: 0; z-index: 100;
+    display: flex; align-items: center; justify-content: center;
+    height: 0; overflow: hidden;
+    background: rgba(12,13,16,0.95);
+    transition: height 0.15s ease;
+    font-family: 'DM Mono', monospace; font-size: 11px; color: var(--muted);
+    letter-spacing: 0.06em;
+  }
+  #ptr-indicator.visible { height: 52px; }
+  #ptr-indicator.ready { color: var(--accent); }
+  .ptr-spinner { width: 14px; height: 14px; border: 1.5px solid var(--border2); border-top-color: var(--accent); border-radius: 50%; margin-right: 8px; animation: spin .7s linear infinite; display: none; }
+  #ptr-indicator.refreshing .ptr-spinner { display: block; }
+
 </style>
 </head>
 <body>
+<div id="ptr-indicator"><div class="ptr-spinner"></div><span id="ptr-text">Pull to refresh</span></div>
 
 <div class="topbar">
   <div class="topbar-inner">
@@ -2861,8 +2877,61 @@ function submitOnboard() {
 }
 
 /* ============================================================
-   INIT
+   PULL TO REFRESH
    ============================================================ */
+(function() {
+  let startY = 0, pulling = false, triggered = false;
+  const indicator = document.getElementById('ptr-indicator');
+  const ptrText = document.getElementById('ptr-text');
+  const THRESHOLD = 72;
+
+  function isProjectTab() {
+    return activeTab && activeTab !== '__labor' && activeTab !== '__receipt' && activeTab !== '__onboard' && activeTab !== '__archive';
+  }
+
+  document.addEventListener('touchstart', function(e) {
+    if (!isProjectTab()) return;
+    if (window.scrollY > 0) return;
+    startY = e.touches[0].clientY;
+    pulling = true;
+    triggered = false;
+  }, { passive: true });
+
+  document.addEventListener('touchmove', function(e) {
+    if (!pulling) return;
+    const dy = e.touches[0].clientY - startY;
+    if (dy <= 0) { pulling = false; return; }
+    const pct = Math.min(dy / THRESHOLD, 1);
+    const h = Math.min(dy * 0.5, 52);
+    indicator.style.height = h + 'px';
+    indicator.classList.toggle('visible', dy > 20);
+    indicator.classList.toggle('ready', dy >= THRESHOLD);
+    ptrText.textContent = dy >= THRESHOLD ? 'Release to refresh' : 'Pull to refresh';
+    triggered = dy >= THRESHOLD;
+  }, { passive: true });
+
+  document.addEventListener('touchend', function() {
+    if (!pulling) return;
+    pulling = false;
+    if (triggered && isProjectTab()) {
+      indicator.classList.add('refreshing');
+      indicator.classList.remove('ready');
+      ptrText.textContent = 'Refreshing…';
+      indicator.style.height = '52px';
+      loadProject(activeTab, true).finally(function() {
+        indicator.classList.remove('refreshing', 'visible');
+        indicator.style.height = '0';
+        ptrText.textContent = 'Pull to refresh';
+      });
+    } else {
+      indicator.classList.remove('visible', 'ready');
+      indicator.style.height = '0';
+    }
+    triggered = false;
+  }, { passive: true });
+})();
+
+
 buildTabBar();
 const initialIds = getProjectIds();
 if (initialIds.length) switchTab(initialIds[0]);
