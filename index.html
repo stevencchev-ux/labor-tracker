@@ -1231,26 +1231,8 @@ function saveSettings() {
   if (activeTab && activeTab !== '__onboard' && activeTab !== '__receipt' && activeTab !== '__labor') loadProject(activeTab, true);
 }
 
-// Default milestone template — same checklist for every flip, matched against Notes via keywords.
-// Each milestone needs: name (display), keywords (array of phrases to look for, matched alongside "completed"/"done"/"finished"), targetDay (for default pacing display before any data exists)
-const MILESTONE_TEMPLATE = [
-  { name: 'Demo complete',              keywords: ['demo'],                          targetDay: 3  },
-  { name: 'Framing / structural',       keywords: ['framing', 'structural'],         targetDay: 5  },
-  { name: 'Rough electrical',           keywords: ['rough electrical', 'electrical'],targetDay: 8  },
-  { name: 'Rough plumbing',             keywords: ['rough plumbing', 'plumbing'],    targetDay: 10 },
-  { name: 'Drywall hang & tape',        keywords: ['drywall'],                       targetDay: 14 },
-  { name: 'Kitchen cabinets installed', keywords: ['kitchen cabinets', 'cabinets'],  targetDay: 22 },
-  { name: 'Bathroom tile',              keywords: ['bathroom tile', 'shower tile', 'tile'], targetDay: 24 },
-  { name: 'Countertops installed',      keywords: ['countertops', 'counters'],       targetDay: 35 },
-  { name: 'Recessed lighting',          keywords: ['recessed', 'recess lights'],     targetDay: 30 },
-  { name: 'Interior paint',             keywords: ['interior paint', 'paint'],       targetDay: 42 },
-  { name: 'Exterior paint',             keywords: ['exterior paint'],                targetDay: 46 },
-  { name: 'Flooring complete',          keywords: ['flooring'],                      targetDay: 45 },
-  { name: 'HVAC',                       keywords: ['hvac'],                          targetDay: 40 },
-  { name: 'Roofing',                    keywords: ['roof', 'roofing'],               targetDay: 20 },
-  { name: 'Landscaping',                keywords: ['landscaping'],                   targetDay: 50 },
-  { name: 'Final inspection',           keywords: ['inspection'],                    targetDay: 60 },
-];
+// Milestones now come from ProjectMilestones table in Excel via the API.
+// MILESTONE_TEMPLATE is no longer hardcoded here.
 
 /* ============================================================
    HELPERS
@@ -1696,50 +1678,26 @@ function renderProject(projectId, data, fromCache) {
     if (w >= 0 && w < totalWeeks) laborByWeek[w] += parseFloat(e.Pay || e.pay) || 0;
   });
 
-  // Milestone detection from notes
-  const milestoneStatus = {};
-  MILESTONE_TEMPLATE.forEach(function(m) { milestoneStatus[m.name] = null; });
-  entries.forEach(function(e) {
-    const notes = (e.Notes || e.notes || '').toLowerCase();
-    if (!notes.includes('completed') && !notes.includes('done') && !notes.includes('finished')) return;
-    const entryDate = excelSerialToDate(e.Date || e.date);
-    MILESTONE_TEMPLATE.forEach(function(m) {
-      if (milestoneStatus[m.name]) return; // already marked
-      const hit = m.keywords.some(function(kw) { return notes.includes(kw); });
-      if (hit) milestoneStatus[m.name] = { date: entryDate, note: e.Notes || e.notes };
-    });
-  });
+  // Milestones from API (ProjectMilestones table in Excel)
+  const milestones = data.milestones || [];
 
-  // Apply admin manual overrides on top of auto-detection
-  const overrides = getOverrides(projectId);
-  const manualStatus = {}; // msName -> 'done' | 'in-progress' | 'overdue' | 'auto'
-  MILESTONE_TEMPLATE.forEach(function(m) {
-    const ov = overrides.milestones[m.name];
-    if (!ov) return;
-    manualStatus[m.name] = ov.status;
-    if (ov.status === 'done') {
-      milestoneStatus[m.name] = { date: ov.date ? new Date(ov.date + 'T12:00:00Z') : null, note: 'Marked complete manually' };
-    } else if (ov.status !== 'done' && milestoneStatus[m.name]) {
-      // manual override says not-done but notes detected done -> manual wins, clear auto-done
-      milestoneStatus[m.name] = null;
-    }
-  });
-
-  const msDoneCount = Object.values(milestoneStatus).filter(Boolean).length;
-  const msOverdueCount = MILESTONE_TEMPLATE.filter(function(m) {
-    if (manualStatus[m.name] === 'in-progress') return false;
-    if (manualStatus[m.name] === 'overdue') return true;
-    return !milestoneStatus[m.name] && elapsed >= m.targetDay;
+  const msDoneCount = milestones.filter(function(m) { return m.Status === 'Complete'; }).length;
+  const msOverdueCount = milestones.filter(function(m) {
+    if (m.Status === 'Complete' || m.Status === 'In Progress') return false;
+    if (m.Status === 'Overdue') return true;
+    return m.Status !== 'Complete' && elapsed >= parseInt(m.TargetDay || 0);
   }).length;
 
   function msStatus(m) {
-    if (manualStatus[m.name] === 'in-progress') return 'active';
-    if (manualStatus[m.name] === 'overdue') return 'overdue';
-    if (milestoneStatus[m.name]) return 'done';
-    if (elapsed >= m.targetDay) return 'overdue';
-    if (elapsed >= m.targetDay - 3) return 'active';
+    if (m.Status === 'Complete') return 'done';
+    if (m.Status === 'In Progress') return 'active';
+    if (m.Status === 'Overdue') return 'overdue';
+    if (elapsed >= parseInt(m.TargetDay || 0)) return 'overdue';
+    if (elapsed >= parseInt(m.TargetDay || 0) - 3) return 'active';
     return 'future';
   }
+
+  const overrides = getOverrides(projectId);
 
   function health() {
     if (overrides.sale) return { label: 'Sold', cls: 'ahead' };
@@ -1872,22 +1830,29 @@ function renderProject(projectId, data, fromCache) {
   });
 
   // Milestones
-  const msPct = Math.round((msDoneCount / MILESTONE_TEMPLATE.length) * 100);
+  const msPct = milestones.length ? Math.round((msDoneCount / milestones.length) * 100) : 0;
   $('ms-bar-' + projectId).style.width = msPct + '%';
-  $('ms-summary-' + projectId).textContent = msDoneCount + ' of ' + MILESTONE_TEMPLATE.length + ' complete' + (msOverdueCount > 0 ? '  ·  ' + msOverdueCount + ' overdue' : '');
+  $('ms-summary-' + projectId).textContent = msDoneCount + ' of ' + milestones.length + ' complete' + (msOverdueCount > 0 ? '  ·  ' + msOverdueCount + ' overdue' : '');
 
   const pillLabel = { done: 'Complete', active: 'Due Soon', overdue: 'Overdue', future: 'Upcoming' };
-  $('ms-list-' + projectId).innerHTML = MILESTONE_TEMPLATE.map(function(m) {
-    const st = msStatus(m);
-    const doneInfo = milestoneStatus[m.name];
-    const dayText = doneInfo && doneInfo.date ? dateLabel(doneInfo.date) : ('Day ' + m.targetDay + '<br>' + dayDate(m.targetDay));
-    return '<div class="ms-item">'
-      + '<div class="ms-day">' + dayText + '</div>'
-      + '<div class="ms-dot ' + st + '"></div>'
-      + '<div class="ms-name ' + st + '">' + m.name + '</div>'
-      + '<div class="ms-pill ' + st + '">' + pillLabel[st] + '</div>'
-      + '</div>';
-  }).join('');
+
+  if (!milestones.length) {
+    $('ms-list-' + projectId).innerHTML = '<div style="font-size:12px;color:var(--muted);padding:12px 0">No milestones found. Run the Populate-Milestones script for this project.</div>';
+  } else {
+    $('ms-list-' + projectId).innerHTML = milestones.map(function(m) {
+      const st = msStatus(m);
+      const targetDay = parseInt(m.TargetDay || 0);
+      const completedDate = m.CompletedDate ? dateLabel(new Date(m.CompletedDate + 'T12:00:00Z')) : null;
+      const dt = new Date(startUTC); dt.setUTCDate(dt.getUTCDate() + targetDay - 1);
+      const dayText = completedDate ? completedDate : ('Day ' + targetDay + '<br>' + dateLabel(dt));
+      return '<div class="ms-item">'
+        + '<div class="ms-day">' + dayText + '</div>'
+        + '<div class="ms-dot ' + st + '"></div>'
+        + '<div class="ms-name ' + st + '">' + (m.MilestoneName || m.Name || '') + '</div>'
+        + '<div class="ms-pill ' + st + '">' + pillLabel[st] + '</div>'
+        + '</div>';
+    }).join('');
+  }
 
   $('cache-note-' + projectId).textContent = fromCache
     ? 'Showing today\u2019s cached data.'
@@ -1918,29 +1883,35 @@ function renderAdminPanel(projectId) {
 
   const overrides = getOverrides(projectId);
   const sale = overrides.sale;
+  const cached = getCache(projectId);
+  const milestones = (cached && cached.milestones) ? cached.milestones : [];
 
   let html = '<div class="admin-panel">';
   html += '<div class="admin-panel-title">&#9881; Admin</div>';
 
-  // Milestones
+  // Milestones from Excel
   html += '<div class="admin-field-label" style="margin-bottom:8px">Milestones</div>';
-  MILESTONE_TEMPLATE.forEach(function(m) {
-    const ov = overrides.milestones[m.name];
-    const currentStatus = ov ? ov.status : 'auto';
-    const currentDate = ov && ov.date ? ov.date : '';
-    const safeId = m.name.replace(/[^a-zA-Z0-9]/g, '');
-    html += '<div class="admin-row">'
-      + '<span class="admin-ms-name">' + m.name + '</span>'
-      + '<input type="date" class="admin-date-input" id="msdate-' + projectId + '-' + safeId + '" value="' + currentDate + '" />'
-      + '<select class="admin-select" id="msstat-' + projectId + '-' + safeId + '">'
-      + '<option value="auto"' + (currentStatus==='auto'?' selected':'') + '>Auto</option>'
-      + '<option value="in-progress"' + (currentStatus==='in-progress'?' selected':'') + '>In Progress</option>'
-      + '<option value="overdue"' + (currentStatus==='overdue'?' selected':'') + '>Overdue</option>'
-      + '<option value="done"' + (currentStatus==='done'?' selected':'') + '>Complete</option>'
-      + '</select>'
-      + '<button class="admin-btn-outline" style="padding:5px 10px;font-size:11px" onclick="applyMilestoneOverride(\'' + projectId + '\',\'' + safeId.replace(/'/g,"\\'") + '\',\'' + m.name.replace(/'/g,"\\'") + '\')">Set</button>'
-      + '</div>';
-  });
+  if (!milestones.length) {
+    html += '<div style="font-size:12px;color:var(--muted);margin-bottom:12px">No milestones loaded. Refresh the project first.</div>';
+  } else {
+    milestones.forEach(function(m, idx) {
+      const msName = m.MilestoneName || m.Name || '';
+      const currentStatus = m.Status || 'Upcoming';
+      const currentDate = m.CompletedDate || '';
+      const safeId = msName.replace(/[^a-zA-Z0-9]/g, '');
+      html += '<div class="admin-row">'
+        + '<span class="admin-ms-name">' + msName + '</span>'
+        + '<input type="date" class="admin-date-input" id="msdate-' + projectId + '-' + safeId + '" value="' + currentDate + '" />'
+        + '<select class="admin-select" id="msstat-' + projectId + '-' + safeId + '">'
+        + '<option value="Upcoming"' + (currentStatus==='Upcoming'?' selected':'') + '>Upcoming</option>'
+        + '<option value="In Progress"' + (currentStatus==='In Progress'?' selected':'') + '>In Progress</option>'
+        + '<option value="Overdue"' + (currentStatus==='Overdue'?' selected':'') + '>Overdue</option>'
+        + '<option value="Complete"' + (currentStatus==='Complete'?' selected':'') + '>Complete</option>'
+        + '</select>'
+        + '<button class="admin-btn-outline" style="padding:5px 10px;font-size:11px" onclick="applyMilestoneOverride(\'' + projectId + '\',\'' + safeId + '\',\'' + msName.replace(/'/g,"\\'") + '\')">Set</button>'
+        + '</div>';
+    });
+  }
 
   html += '<div class="admin-divider"></div>';
 
@@ -1971,12 +1942,30 @@ function renderAdminPanel(projectId) {
   panelEl.innerHTML = html;
 }
 
-function applyMilestoneOverride(projectId, safeId, msName) {
+async function applyMilestoneOverride(projectId, safeId, msName) {
   const status = $('msstat-' + projectId + '-' + safeId).value;
   const date = $('msdate-' + projectId + '-' + safeId).value;
-  setMilestoneOverride(projectId, msName, status, date);
-  const cached = getCache(projectId);
-  if (cached) renderProject(projectId, cached, true);
+  const url = getAzureUrl();
+  if (!url) { alert('Labor-Tracker URL not set. Add it in Settings.'); return; }
+
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        type: 'milestone',
+        projectId: projectId,
+        milestoneName: msName,
+        status: status,
+        completedDate: date || ''
+      })
+    });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    // Refresh project data so milestone list updates for everyone
+    await loadProject(projectId, true);
+  } catch(err) {
+    alert('Failed to update milestone: ' + err.message);
+  }
 }
 
 function markSold(projectId) {
