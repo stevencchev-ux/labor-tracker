@@ -1116,6 +1116,7 @@ function pinPress(digit) {
       if (pinBuffer === PASSCODE) {
         adminUnlocked = true;
         internalUnlocked = true;
+        adminPanelOpen = false;
         $('lock-btn').classList.add('unlocked');
         $('lock-btn').innerHTML = '&#128275;';
         closeLockModal();
@@ -1939,10 +1940,24 @@ function renderProject(projectId, data, fromCache) {
 /* ============================================================
    ADMIN PANEL — milestone overrides, mark as sold, delete project
    ============================================================ */
+let adminPanelOpen = false;
+
+function toggleAdminPanelView(projectId) {
+  adminPanelOpen = !adminPanelOpen;
+  renderAdminPanel(projectId);
+}
+
 function renderAdminPanel(projectId) {
   const panelEl = $('admin-panel-' + projectId);
   if (!panelEl) return;
   if (!adminUnlocked) { panelEl.innerHTML = ''; return; }
+
+  if (!adminPanelOpen) {
+    panelEl.innerHTML = '<div style="display:flex;justify-content:flex-end;margin-bottom:8px">'
+      + '<button onclick="toggleAdminPanelView(\'' + projectId + '\')" style="background:var(--surf2);border:1px solid var(--border2);border-radius:7px;padding:6px 14px;color:var(--accent);font-family:DM Mono,monospace;font-size:11px;cursor:pointer;letter-spacing:0.04em">&#9881; Admin &#9662;</button>'
+      + '</div>';
+    return;
+  }
 
   const overrides = getOverrides(projectId);
   const sale = overrides.sale;
@@ -1950,7 +1965,10 @@ function renderAdminPanel(projectId) {
   const milestones = (cached && cached.milestones) ? cached.milestones : [];
 
   let html = '<div class="admin-panel">';
-  html += '<div class="admin-panel-title">&#9881; Admin</div>';
+  html += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">';
+  html += '<div class="admin-panel-title" style="margin-bottom:0">&#9881; Admin</div>';
+  html += '<button onclick="toggleAdminPanelView(\'' + projectId + '\')" style="background:none;border:1px solid var(--border2);border-radius:7px;padding:5px 12px;color:var(--text2);font-family:DM Mono,monospace;font-size:11px;cursor:pointer">Hide &#9652;</button>';
+  html += '</div>';
 
   // Milestones from Excel
   html += '<div class="admin-field-label" style="margin-bottom:8px">Milestones</div>';
